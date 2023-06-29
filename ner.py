@@ -73,6 +73,8 @@ def batch_ner(prompts, ner_model, ner_tok, max_len=512):
             entities.append(ner_tok.decode(cur_entity, skip_special_tokens=True))
             cur_entity.clear()
 
+        entities = [e for e in set(entities) if e and len(e)>=3]
+
         batch_entities.append(entities)
     return batch_entities
 
