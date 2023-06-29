@@ -6,15 +6,18 @@ import json
 import jsonlines
 
 df = pd.read_csv("data/umls_kg_filter.csv")
-ner_results = json.load(open("data/ner_results.json", "r"))
-instuctions = list(jsonlines.open('data/instruction_dataall.jsonl'))[:1000]
-s2t = {}
-t2s = {}
+size = 1000
+ner_results = json.load(open("data/ner_results.json", "r"))[:size]
+instuctions = list(jsonlines.open('data/instruction_dataall.jsonl'))[:size]
+
+from collections import defaultdict
+s2t = defaultdict(list)
+t2s = defaultdict(list)
 edge_white_list = ['has active ingredient',
                    'has causative agent',
-                   'has direct procedure site',
-                   'has dose form',
-                   'has occurrence',
+                #    'has direct procedure site',
+                #    'has dose form',
+                #    'has occurrence',
                    'has pathological process',
                    'possibly equivalent to'
                    ]
@@ -26,22 +29,10 @@ for row in df.itertuples():
     edge = row.edge.lower()
     if edge not in edge_white_list:
         continue
-    s2t_leaf = {target:tri_id}
-    t2s_leaf = {source:tri_id}
-    if s2t.get(source):
-        if s2t[source].get(edge):
-            s2t[source][edge].append(s2t_leaf)
-        else:
-            s2t[source][edge] = [s2t_leaf]
-    else:
-        s2t[source] = {edge: [s2t_leaf]}
-    if t2s.get(target):
-        if t2s[target].get(edge):
-            t2s[target][edge].append(t2s_leaf)
-        else:
-            t2s[target][edge] = [t2s_leaf]
-    else:
-        t2s[target] = {edge: [t2s_leaf]}
+    s2t[source].append(tri_id)
+    t2s[target].append(tri_id)
+
+print("s2t", len(s2t.keys()), "t2s", len(t2s.keys()))
 
 class Searcher:
     def __init__(self, keys):
@@ -81,26 +72,48 @@ class Searcher:
             return res
     
     def lcs_bf(self, q:str):
-        threshold = max([len(w) for w in q.split(" ")])
+        threshold = max(int(0.8*len(q)),3)
+        # threshold = max([len(w) for w in q.split()])
         if self.his.get(q):
             return self.his[q]
         else:
-            res = [k for k in self.keys if pylcs.lcs_sequence_length(q, k) >= threshold]
+            res = [k for k in self.keys if pylcs.lcs_string_length(q, k) >= threshold]
             self.his[q] = res
             return res
 
 s2t_searcher = Searcher(s2t.keys())
 t2s_searcher = Searcher(t2s.keys())
-
-for i,res in enumerate(ner_results):
-    in_entities = res['input']
-    out_entities = res['output']
-    in_source_keys = [s2t_searcher.lcs_bf(e) for e in in_entities]
-    in_target_keys = [t2s_searcher.lcs_bf(e) for e in in_entities]
-    out_source_keys = [s2t_searcher.lcs_bf(e) for e in out_entities]
-    out_target_keys = [t2s_searcher.lcs_bf(e) for e in out_entities]
-    in_related = [{"related_sources":in_source_keys, "related_targets":in_target_keys}]
-    out_related = [{"related_sources":out_source_keys, "related_targets":out_target_keys}]
+from tqdm.auto import tqdm
+for i,res in tqdm(enumerate(ner_results), total=len(ner_results)):
+    in_entities = []
+    out_entities = []
+    
+    in_source_keys = []
+    in_target_keys = []
+    out_source_keys = []
+    out_target_keys = []
+    for e in res['input_entities']:
+        in_source_key = s2t_searcher.in_bf(e)
+        in_target_key = t2s_searcher.in_bf(e)
+        if len(in_source_key)+len(in_target_key) > 500:
+            continue
+        if len(in_source_key) == 0 and len(in_target_key) == 0:
+            continue
+        in_source_keys.append(in_source_key)
+        in_target_keys.append(in_target_key)
+        in_entities.append(e)
+        
+    for e in res['output_entities']:
+        out_source_key = s2t_searcher.in_bf(e)
+        out_target_key = t2s_searcher.in_bf(e)
+        if len(out_source_key)+len(out_target_key) > 500:
+            continue
+        if len(out_source_key) == 0 and len(out_target_key) == 0:
+            continue
+        out_source_keys.append(out_source_key)
+        out_target_keys.append(out_target_key)
+        out_entities.append(e)
+        
     instuctions[i].update({
         "input_grounding": {"entities": in_entities, 
                             "related_sources":in_source_keys, 
@@ -110,4 +123,4 @@ for i,res in enumerate(ner_results):
                             "related_targets":out_target_keys},
     })
 
-json.dump(instuctions, open("data/instruction_grounding_1000.json", "w"), indent=4)
+json.dump(instuctions, open("data/instruction_grounding_1000.json", "w"), )
