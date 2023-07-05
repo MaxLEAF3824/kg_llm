@@ -6,27 +6,25 @@ import json
 import jsonlines
 
 df = pd.read_csv("data/umls_kg_filter.csv")
+slice_start = 44000
 size = 1000
-ner_results = json.load(open("data/ner_results.json", "r"))[:size]
-instuctions = list(jsonlines.open('data/instruction_dataall.jsonl'))[:size]
+ner_results = json.load(open("data/ner_results.json", "r"))
+instuctions = list(jsonlines.open('data/instruction_dataall.jsonl'))[slice_start:slice_start+size]
 
 from collections import defaultdict
 s2t = defaultdict(list)
 t2s = defaultdict(list)
 edge_white_list = ['has active ingredient',
                    'has causative agent',
-                #    'has direct procedure site',
-                #    'has dose form',
-                #    'has occurrence',
                    'has pathological process',
                    'possibly equivalent to'
                    ]
 
 for row in df.itertuples():
     tri_id = row[0]
-    source = row.source.lower()
-    target = row.target.lower()
-    edge = row.edge.lower()
+    source = row.source
+    target = row.target
+    edge = row.edge
     if edge not in edge_white_list:
         continue
     s2t[source].append(tri_id)
@@ -37,37 +35,48 @@ print("s2t", len(s2t.keys()), "t2s", len(t2s.keys()))
 class Searcher:
     def __init__(self, keys):
         self.keys = keys
-        self.keys_str, self.keys_idx = self.build(keys)
         self.his = {}
-    
-    def build(self, keys):
-        keys_str = ''.join(keys)
-        len_sum = 0
-        keys_idx = []
-        for k in keys:
-            keys_idx.append(len_sum)
-            len_sum += len(k)
-        return keys_str, keys_idx
+        self.build()
 
-    def in_re(self, q):
-        if self.his.get(q):
-            return self.his[q]
-        else:
-            pattern = re.compile(re.escape(q))
-            matches = []
-            for m in pattern.finditer(self.keys_str):
-                start_pos_idx = bisect.bisect_right(self.keys_idx, m.start()) - 1
-                start_pos = self.keys_idx[start_pos_idx]
-                end_pos = self.keys_idx[start_pos_idx + 1] if start_pos_idx + 1 < len(self.keys_idx) - 1 else -1
-                matches.append(self.keys_str[start_pos:end_pos])
-            self.his[q] = matches
-        return matches
+    def build(self):
+        self.words = {}
+        self.encoded_keys = {}
+        for k in self.keys:
+            ks = k.split()
+            for w in ks:
+                if self.words.get(w.lower()):
+                    continue
+                else:
+                    self.words[w.lower()] = (f"w{len(self.words)}",w)
+        for k in keys:
+            encoded_k = ''.join([self.words[w.lower()][0] for w in k.split()])
+            self.encoded_keys[encoded_k] = keys[k]
+    
+    def judge(self, str1: str, str2: str) -> bool:
+        words1 = str1.lower().split()
+        words2 = str2.lower().split()
+
+        start_index = 0
+        word1 = words1[0]
+
+        for i in range(len(words2)):
+            if words2[i] == word1:
+                start_index = i
+                for j in range(1, len(words1)):
+                    if i + j < len(words2) and words1[j] == words2[i + j]:
+                        continue
+                    else:
+                        break
+                else:
+                    return True
+
+        return False
 
     def in_bf(self, q):
         if self.his.get(q):
             return self.his[q]
         else:
-            res = [k for k in self.keys if q in k]
+            res = [k for k in self.keys if self.judge(q, k)]
             self.his[q] = res
             return res
     
@@ -83,44 +92,36 @@ class Searcher:
 
 s2t_searcher = Searcher(s2t.keys())
 t2s_searcher = Searcher(t2s.keys())
+
+def get_entities_triplets(entities, threshold=300):
+    all_entities = []
+    all_triplets = []
+    for e in entities:
+        source_keys = s2t_searcher.in_bf(e)
+        target_keys = t2s_searcher.in_bf(e)
+        if len(source_keys) + len(target_keys) > threshold or len(source_keys) + len(target_keys) == 0:
+            continue
+        triplets = []
+        for k in source_keys:
+            triplets.extend(s2t[k])
+        for k in target_keys:
+            triplets.extend(t2s[k])
+        triplets = list(set(triplets))
+        all_entities.append(e)
+        all_triplets.append(triplets)
+    return all_entities, all_triplets
+
 from tqdm.auto import tqdm
-for i,res in tqdm(enumerate(ner_results), total=len(ner_results)):
-    in_entities = []
-    out_entities = []
-    
-    in_source_keys = []
-    in_target_keys = []
-    out_source_keys = []
-    out_target_keys = []
-    for e in res['input_entities']:
-        in_source_key = s2t_searcher.in_bf(e)
-        in_target_key = t2s_searcher.in_bf(e)
-        if len(in_source_key)+len(in_target_key) > 500:
-            continue
-        if len(in_source_key) == 0 and len(in_target_key) == 0:
-            continue
-        in_source_keys.append(in_source_key)
-        in_target_keys.append(in_target_key)
-        in_entities.append(e)
-        
-    for e in res['output_entities']:
-        out_source_key = s2t_searcher.in_bf(e)
-        out_target_key = t2s_searcher.in_bf(e)
-        if len(out_source_key)+len(out_target_key) > 500:
-            continue
-        if len(out_source_key) == 0 and len(out_target_key) == 0:
-            continue
-        out_source_keys.append(out_source_key)
-        out_target_keys.append(out_target_key)
-        out_entities.append(e)
+for i in tqdm(range(size)):
+    res = ner_results[i]
+    in_e, in_t = get_entities_triplets(res['input_entities'])
+    out_e, out_t = get_entities_triplets(res['output_entities'])
         
     instuctions[i].update({
-        "input_grounding": {"entities": in_entities, 
-                            "related_sources":in_source_keys, 
-                            "related_targets":in_target_keys},
-        "output_grounding": {"entities": out_entities, 
-                            "related_sources":out_source_keys, 
-                            "related_targets":out_target_keys},
-    })
+        "input_entities": in_e,
+        "input_triplets": in_t,
+        "output_entities": out_e,
+        "output_triplets": out_t,
+        })
 
-json.dump(instuctions, open("data/instruction_grounding_1000.json", "w"), )
+json.dump(instuctions, open(f"data/kg_instruction_{size}.json", "w"))
