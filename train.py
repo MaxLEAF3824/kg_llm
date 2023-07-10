@@ -31,6 +31,7 @@ def main():
     num_warmup_steps = 10
     num_epochs = 3
     batch_size = 1
+    pickle_dataset_template = "data/EntityDataset_1000/ep_{}.pkl"
     # device = 'cuda'
     
 
@@ -61,7 +62,7 @@ def main():
     # model.print_trainable_parameters()
 
     # 快速初始化数据集
-    dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len)
+    dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len,from_pickle=pickle_dataset_template.format(0))
     dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
     
     model = accelerator.prepare(model)
@@ -130,7 +131,7 @@ def main():
             scheduler.step()
             optimizer.zero_grad()
         if epoch != num_epochs -1:
-            dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len)
+            dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len, from_pickle=pickle_dataset_template.format(epoch+1))
             dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
 
     model.save_pretrained(f"output/full_book_13b_bsz{batch_size}_epoch{num_epochs}_lr{lr}")

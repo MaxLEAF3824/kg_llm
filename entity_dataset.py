@@ -16,12 +16,12 @@ from multiprocessing import Pool, cpu_count
 from accelerate import Accelerator
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
-
+import uuid
 
 
 
 class EntityDataset(Dataset):
-    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=1024, from_pickle=None, dash_token='[DASH]', *args, **kwargs):
+    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=1024, from_pickle=None, dash_token='[DASH]', dump=False, dump_dir="data", *args, **kwargs):
         self.prompt_template = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
         self.max_len = max_len
         self.dash_token = dash_token
@@ -34,8 +34,9 @@ class EntityDataset(Dataset):
             print(f"Loaded dataset from pickle file {from_pickle}")
         else:
             self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts = self.make_inputs()
-            pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(f"EntityDataset_{len(self)}.pkl", "wb"))
-            print(f"dump dataset to pickle file EntityDataset_{len(self)}.pkl")
+            if dump:
+                pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(f"{dump_dir}/EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}.pkl", "wb"))
+                print(f"dump dataset to pickle file {dump_dir}/EntityDataset_{len(self)}.pkl")
         
         print(f"Loaded dataset with {len(self)} elements")
     
@@ -47,18 +48,17 @@ class EntityDataset(Dataset):
         prompt_list = []
 
         # 多进程
-        # process_num = 1
+        # process_num = 64
         # pool = Pool(process_num)
         # print(f"Pool created with {process_num} process")
+        # shared_data = self.data
+        # shared_kg = self.kg
         # from multiprocessing import Manager
         # manager = Manager()
-        # shared_data = self.data
         # shared_data = manager.list(self.data)
-        # shared_kg = self.kg
         # shared_kg = manager.list(self.kg)
         # make_input_func = partial(self.make_input_func, kg=shared_kg, tok=self.tokenizer)
-        # res = pool.map(make_input_func, shared_data)
-        # for output in res:
+        # for output in tqdm(pool.imap(make_input_func, shared_data),total=len(shared_data)):
         #     input_ids_list.append(output[0])
         #     attention_mask_list.append(output[1])
         #     labels_list.append(output[2])
@@ -248,3 +248,7 @@ class EntityDataset(Dataset):
     def __getitem__(self, idx):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx], self.hard_position_type_ids[idx]
 
+if __name__ == "__main__":
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained("/home/cs/yangyuchen/yushengliao/Medical_LLM/FastChat/checkpoints/medical_llama_13b_chatv1.3/checkpoint-4974/")
+    dst = EntityDataset(data_path='data/kg_instruction_100000.json', kg_path='data/umls_kg_filter.csv', tokenizer=tok, max_len=1024, dump=True, dump_dir='data/EntityDataset_100k')

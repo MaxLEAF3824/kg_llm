@@ -4,7 +4,7 @@ import pandas as pd
 import random
 import torch
 from tqdm.auto import tqdm
-import ujson as json
+import json
 import re
 import bisect
 import pdb
@@ -12,10 +12,13 @@ import traceback
 
 slice_start = 44000
 size = 1000
-instructions = list(jsonlines.open('data/instruction_dataall.jsonl'))[slice_start:slice_start+size]
+instructions = list(jsonlines.open('data/instruction_dataall.jsonl'))
+instructions = [ins for ins in instructions if ins['input'] and ins['output']]
+
 df = pd.read_csv("data/umls_kg_filter.csv")
 
 mt_path = "/mnt/workspace/guoyiqiu/coding/huggingface/my_models/RohanVB_umlsbert_ner"
+mt_path = "/home/cs/yangyuchen/guoyiqiu/my_models/RohanVB_umlsbert_ner"
 
 ner_model = AutoModelForTokenClassification.from_pretrained(mt_path)
 ner_tok = AutoTokenizer.from_pretrained(mt_path)
@@ -123,8 +126,8 @@ def batch_ner(prompts, ner_model, ner_tok, max_len=512):
                 entity_start_idx = prompt.lower().index(entity_str_post)
                 restored_entities.append(prompt[entity_start_idx:entity_start_idx+len(entity_str_post)])
             except Exception as e:
-                print(f"entity_str_post:{entity_str_post}")
-                print(f"prompt.lower():{prompt.lower()}")
+                # print(f"entity_str_post:{entity_str_post}")
+                # print(f"prompt.lower():{prompt.lower()}")
                 # assert False
                 global error_count
                 error_count += 1
@@ -137,10 +140,11 @@ bsz = 16
 
 all_ner_results = []
 
+
 for batch_ins in tqdm(batch_list_generator(instructions, bsz),total=len(instructions)//bsz):
-    input_batch_entities = batch_ner([ins['input'].strip() for ins in batch_ins], ner_model, ner_tok)
-    output_batch_entities = batch_ner([ins['output'].strip() for ins in batch_ins], ner_model, ner_tok)
-    batch_results = [{'input':batch_ins[i]['input'].strip(), 'input_entities':input_batch_entities[i],'output':batch_ins[i]['output'].strip(), 'output_entities':output_batch_entities[i],} for i in range(len(input_batch_entities))]
+    input_batch_entities = batch_ner([ins['input'] for ins in batch_ins], ner_model, ner_tok)
+    output_batch_entities = batch_ner([ins['output'] for ins in batch_ins], ner_model, ner_tok)
+    batch_results = [{'input':batch_ins[i]['input'], 'input_entities':input_batch_entities[i],'output':batch_ins[i]['output'], 'output_entities':output_batch_entities[i],} for i in range(len(input_batch_entities))]
     all_ner_results.extend(batch_results)
 print(f"error_entity_count:{error_count}")
-json.dump(all_ner_results, open("data/ner_results.json", "w"))
+json.dump(all_ner_results, open("data/ner_results_all.json", "w"))
