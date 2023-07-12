@@ -5,9 +5,9 @@ import pandas as pd
 import json
 import jsonlines
 
-df = pd.read_csv("data/umls_kg_filter.csv")
+df = pd.read_csv("data/umls_kg_filter_count_5.csv")
 slice_start = 44000
-size = 100000
+size = 10000
 ner_results = json.load(open("data/ner_results_all.json", "r"))
 ner_results = ner_results[slice_start:slice_start+size]
 

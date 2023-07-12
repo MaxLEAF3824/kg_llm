@@ -35,8 +35,9 @@ class EntityDataset(Dataset):
         else:
             self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts = self.make_inputs()
             if dump:
-                pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(f"{dump_dir}/EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}.pkl", "wb"))
-                print(f"dump dataset to pickle file {dump_dir}/EntityDataset_{len(self)}.pkl")
+                dump_path = f"{dump_dir}/EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}.pkl"
+                pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(dump_path, "wb"))
+                print(f"dump dataset to pickle file {dump_path}")
         
         print(f"Loaded dataset with {len(self)} elements")
     
@@ -179,6 +180,7 @@ class EntityDataset(Dataset):
         # print(f"hard_position_type_ids:{hard_position_type_ids} length:{len(hard_position_type_ids)}")
 
         # 利用hard_position_type_ids计算attention_mask_map, shape为seq_len*seq_len
+        # 0代表non-entity tokens，1代表entity tokens, 2代表triplet tokens, 3代表triplet target tokens
         # type0可以看见type0和type1, type1可以看见type0,type1, type2可以看见type1,type2和type3, type3可以看见type1,type2和type3
         attention_mask = torch.tril(torch.ones(seq_len,seq_len))
         for i in (range(seq_len)):
@@ -251,4 +253,16 @@ class EntityDataset(Dataset):
 if __name__ == "__main__":
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained("/home/cs/yangyuchen/yushengliao/Medical_LLM/FastChat/checkpoints/medical_llama_13b_chatv1.3/checkpoint-4974/")
-    dst = EntityDataset(data_path='data/kg_instruction_100000.json', kg_path='data/umls_kg_filter.csv', tokenizer=tok, max_len=1024, dump=True, dump_dir='data/EntityDataset_100k')
+    # 调整tokenizer
+    tok.padding_side = 'right'
+    tok.pad_token = tok.eos_token
+    tok.pad_token_id = tok.eos_token_id
+    dash_token = "[DASH]"
+    tok.add_tokens([dash_token])
+    accelerator = Accelerator()
+    dst = EntityDataset(data_path='data/kg_instruction_1000.json', kg_path='data/umls_kg_filter_count_5.csv', tokenizer=tok, max_len=1024, from_pickle="/home/cs/yangyuchen/guoyiqiu/kg_llm/data/EntityDataset_1k/ep_0.pkl")
+    dl = DataLoader(dst, batch_size=1, shuffle=True, collate_fn=dst.collate_fn)
+    dl = accelerator.prepare(dl)
+    for d in dl:
+        print(d)
+        break
