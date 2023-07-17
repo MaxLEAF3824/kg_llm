@@ -1,6 +1,6 @@
 import re
 import bisect
-import pylcs
+# import pylcs
 import pandas as pd
 import json
 import jsonlines
@@ -8,7 +8,7 @@ import jsonlines
 df = pd.read_csv("data/umls_kg_filter_count_5_with_def.csv")
 slice_start = 44000
 size = 10000
-ner_results = json.load(open("data/ner_results_chat_history_all.json", "r"))
+ner_results = json.load(open("data/ner_results_chat_usmle_all.json", "r"))
 ner_results = ner_results
 
 from collections import defaultdict
@@ -66,15 +66,15 @@ class Searcher:
             self.his[q] = res
             return res
     
-    def lcs_bf(self, q:str):
-        threshold = max(int(0.8*len(q)),3)
-        # threshold = max([len(w) for w in q.split()])
-        if self.his.get(q):
-            return self.his[q]
-        else:
-            res = [k for k in self.keys if pylcs.lcs_string_length(q, k) >= threshold]
-            self.his[q] = res
-            return res
+    # def lcs_bf(self, q:str):
+    #     threshold = max(int(0.8*len(q)),3)
+    #     # threshold = max([len(w) for w in q.split()])
+    #     if self.his.get(q):
+    #         return self.his[q]
+    #     else:
+    #         res = [k for k in self.keys if pylcs.lcs_string_length(q, k) >= threshold]
+    #         self.his[q] = res
+    #         return res
 
 s2t_searcher = Searcher(s2t.keys())
 t2s_searcher = Searcher(t2s.keys())
@@ -130,4 +130,4 @@ print(f"process_num: {process_num}")
 for i, output in enumerate(tqdm(pool.imap(get_et, ner_results), total=len(ner_results))):
     grounding_results[i].update(output)
 
-json.dump(grounding_results, open(f"data/kg_chat_{len(ner_results)}.json", "w"))
+json.dump(grounding_results, open(f"data/kg_chat_usmle_{len(ner_results)}.json", "w"))
