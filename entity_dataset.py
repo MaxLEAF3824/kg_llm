@@ -21,7 +21,7 @@ import uuid
 
 
 class EntityDataset(Dataset):
-    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=1024, from_pickle=None, dash_token='[DASH]', dump=False, dump_dir="data", *args, **kwargs):
+    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=1024, from_pickle=None, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", *args, **kwargs):
         self.prompt_template = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
         self.max_len = max_len
         self.dash_token = dash_token
@@ -35,7 +35,9 @@ class EntityDataset(Dataset):
         else:
             self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts = self.make_inputs()
             if dump:
-                dump_path = f"{dump_dir}/EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}.pkl"
+                if dump_name is None:
+                    dump_name = f"EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
+                dump_path = f"{dump_dir}/{dump_name}.pkl"
                 pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(dump_path, "wb"))
                 print(f"dump dataset to pickle file {dump_path}")
         
@@ -260,7 +262,7 @@ if __name__ == "__main__":
     dash_token = "[DASH]"
     tok.add_tokens([dash_token])
     accelerator = Accelerator()
-    dst = EntityDataset(data_path='data/kg_instruction_1000.json', kg_path='data/umls_kg_filter_count_5.csv', tokenizer=tok, max_len=1024, from_pickle="/home/cs/yangyuchen/guoyiqiu/kg_llm/data/EntityDataset_1k/ep_0.pkl")
+    dst = EntityDataset(data_path='data/kg_chat_19099.json', kg_path='data/umls_kg_filter_count_5_with_def.csv', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/EntityDataset_chat")
     dl = DataLoader(dst, batch_size=1, shuffle=True, collate_fn=dst.collate_fn)
     dl = accelerator.prepare(dl)
     for d in dl:

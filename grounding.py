@@ -5,11 +5,11 @@ import pandas as pd
 import json
 import jsonlines
 
-df = pd.read_csv("data/umls_kg_filter_count_5.csv")
+df = pd.read_csv("data/umls_kg_filter_count_5_with_def.csv")
 slice_start = 44000
 size = 10000
-ner_results = json.load(open("data/ner_results_all.json", "r"))
-ner_results = ner_results[slice_start:slice_start+size]
+ner_results = json.load(open("data/ner_results_chat_history_all.json", "r"))
+ner_results = ner_results
 
 from collections import defaultdict
 s2t = defaultdict(list)
@@ -17,13 +17,14 @@ t2s = defaultdict(list)
 edge_white_list = ['has active ingredient',
                    'has causative agent',
                    'has pathological process',
-                   'possibly equivalent to'
+                   'possibly equivalent to',
+                   'has definition of',
                    ]
 
 for row in df.itertuples():
     tri_id = row[0]
-    source = row.source
-    target = row.target
+    source = str(row.source)
+    target = str(row.target)
     edge = row.edge
     if edge not in edge_white_list:
         continue
@@ -36,21 +37,6 @@ class Searcher:
     def __init__(self, keys):
         self.keys = keys
         self.his = {}
-        # self.build()
-
-    def build(self):
-        self.words = {}
-        self.encoded_keys = {}
-        for k in self.keys:
-            ks = k.split()
-            for w in ks:
-                if self.words.get(w.lower()):
-                    continue
-                else:
-                    self.words[w.lower()] = (f"w{len(self.words)}",w)
-        for k in self.keys:
-            encoded_k = ''.join([self.words[w.lower()][0] for w in k.split()])
-            self.encoded_keys[encoded_k] = self.keys[k]
     
     def judge(self, str1: str, str2: str) -> bool:
         words1 = str1.lower().split()
@@ -93,19 +79,25 @@ class Searcher:
 s2t_searcher = Searcher(s2t.keys())
 t2s_searcher = Searcher(t2s.keys())
 
-def get_entities_triplets(entities, threshold=300):
+def get_entities_triplets(entities, threshold=50):
     all_entities = []
     all_triplets = []
     for e in entities:
-        source_keys = s2t_searcher.in_bf(e)
-        target_keys = t2s_searcher.in_bf(e)
-        if len(source_keys) + len(target_keys) > threshold or len(source_keys) + len(target_keys) == 0:
-            continue
         triplets = []
+        
+        source_keys = s2t_searcher.in_bf(e)
+        
+        # target_keys = t2s_searcher.in_bf(e)
+        # if len(source_keys) + len(target_keys) > threshold or len(source_keys) + len(target_keys) == 0:
+        #     continue
+        # for k in target_keys:
+        #     triplets.extend(t2s[k])
+        if len(source_keys) > threshold or len(source_keys) == 0:
+            continue
+        
         for k in source_keys:
             triplets.extend(s2t[k])
-        for k in target_keys:
-            triplets.extend(t2s[k])
+        
         triplets = list(set(triplets))
         all_entities.append(e)
         all_triplets.append(triplets)
@@ -138,4 +130,4 @@ print(f"process_num: {process_num}")
 for i, output in enumerate(tqdm(pool.imap(get_et, ner_results), total=len(ner_results))):
     grounding_results[i].update(output)
 
-json.dump(grounding_results, open(f"data/kg_instruction_{size}.json", "w"))
+json.dump(grounding_results, open(f"data/kg_chat_{len(ner_results)}.json", "w"))
