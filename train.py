@@ -23,14 +23,16 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictTy
 from entity_dataset import EntityDataset
 from treelib import Tree
 import time
+import uuid
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
 def main():
     mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/vicuna-7b'
     # mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/FastChat/checkpoints/medical_llama_13b_chatv1.3/checkpoint-4974/'
     kg_path = "data/umls_kg_filter_count_5.csv"
-    data_path = "data/kg_instruction_10000.json"
-    pickle_dataset_template = "data/EntityDataset_10k/ep_{}.pkl"
+    data_path = "data/kg_instruction_chat_usmle.json"
+    pickle_dataset_template = "data/EntityDataset_chat_usmle/ep_{}.pkl"
+
     max_len = 2048
     dash_token = "[DASH]"
     lr = 8e-6
@@ -38,6 +40,7 @@ def main():
     num_epochs = 3
     batch_size = 2
     # device = 'cuda'
+    out_dir = f"output/full_vicuna_7b_{str(uuid.uuid4().int)[:8]}"
     
     start_time = time.time()
     accelerator = Accelerator()
@@ -144,8 +147,6 @@ def main():
             dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
         accelerator.print(f"train epoch{epoch+1} time:{time.time()-start_time}")
 
-    import uuid
-    out_dir = f"output/full_vicuna_7b_bsz{batch_size}_epoch{num_epochs}_lr{lr}_{str(uuid.uuid4().int)[:8]}"
     # out_dir = f"output/full_vicuna_7b_chat"
     
     # save model

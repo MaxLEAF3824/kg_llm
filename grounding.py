@@ -77,7 +77,7 @@ class Searcher:
     #         return res
 
 s2t_searcher = Searcher(s2t.keys())
-t2s_searcher = Searcher(t2s.keys())
+# t2s_searcher = Searcher(t2s.keys())
 
 def get_entities_triplets(entities, threshold=50):
     all_entities = []

@@ -21,7 +21,7 @@ import uuid
 
 
 class BasicDataset(Dataset):
-    def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=2048, from_pickle=None, dash_token='[DASH]', dump=False, dump_dir="data", *args, **kwargs):
+    def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=2048, from_pickle=None, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", *args, **kwargs):
         self.prompt_template = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
         self.max_len = max_len
         self.dash_token = dash_token
@@ -34,7 +34,9 @@ class BasicDataset(Dataset):
         else:
             self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs()
             if dump:
-                dump_path = f"{dump_dir}/BasicDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}.pkl"
+                if dump_name is None:
+                    dump_name = f"BasicDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
+                dump_path = f"{dump_dir}/{dump_name}.pkl"
                 pickle.dump((self.input_ids, self.attention_mask, self.labels, self.prompts), open(dump_path, "wb"))
                 print(f"dump dataset to pickle file {dump_path}")
         
@@ -59,6 +61,7 @@ class BasicDataset(Dataset):
     def make_input_func(self, ins, tok):
         # tok = deepcopy(tok)
         all_text = self.prompt_template.format(input=ins['input'], output=ins['output'])
+        all_text = all_text.strip() + f" {tok.eos_token}"
         # print(f"all_text:{all_text}")
         inp = tok(all_text)
         input_ids, attention_mask = inp['input_ids'], inp['attention_mask']
@@ -117,9 +120,9 @@ if __name__ == "__main__":
     tok.padding_side = 'right'
     tok.pad_token = tok.eos_token
     tok.pad_token_id = tok.eos_token_id
-    dst = BasicDataset(data_path='data/usmle_train.json', tokenizer=tok, max_len=2048, dump=True, dump_dir="data/BasicDataset_usmle")
-    dl = DataLoader(dst, batch_size=2, shuffle=True, collate_fn=dst.collate_fn)
     accelerator = Accelerator()
+    dst = BasicDataset(data_path='data/kg_chat_usmle_10178.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/BasicDataset_chat_usmle")
+    dl = DataLoader(dst, batch_size=1, shuffle=True, collate_fn=dst.collate_fn)
     dl = accelerator.prepare(dl)
     for d in dl:
         print(d)

@@ -23,20 +23,22 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictTy
 from basic_dataset import BasicDataset
 from treelib import Tree
 import time
+import uuid
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
 def main():
     mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/vicuna-7b'
-    mt_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/output/full_vicuna_7b_chat_baseline_bsz2_epoch3_lr8e-06_46822816'
+    # mt_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/output/full_vicuna_7b_chat_baseline_bsz2_epoch3_lr8e-06_46822816'
     # mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/FastChat/checkpoints/medical_llama_13b_chatv1.3/checkpoint-4974/'
-    data_path = "data/kg_chat_19099.json"
-    pickle_dataset_template = "data/BasicDataset_usmle/ep_{}.pkl"
+    data_path = "data/kg_chat_usmle_10178.json"
+    pickle_dataset_template = "data/BasicDataset_chat_usmle/ep_{}.pkl"
     max_len = 2048      
     lr = 8e-6
     warmup_ratio = 0.04
     num_epochs = 3
     batch_size = 2
     # device = 'cuda'
+    out_dir = f"output/full_vicuna_7b_chat_usmle_baseline_ft_bsz{batch_size}_epoch{num_epochs}_lr{lr}_{str(uuid.uuid4().int)[:8]}"
     
     start_time = time.time()
     accelerator = Accelerator()
@@ -96,8 +98,7 @@ def main():
             dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
         accelerator.print(f"train epoch{epoch+1} time:{time.time()-start_time}")
 
-    import uuid
-    out_dir = f"output/full_vicuna_7b_chat_baseline_ft_bsz{batch_size}_epoch{num_epochs}_lr{lr}_{str(uuid.uuid4().int)[:8]}"
+
     
     # save model
     accelerator.print(f"Saving model and tokenizer to {out_dir}")

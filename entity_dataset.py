@@ -102,6 +102,7 @@ class EntityDataset(Dataset):
     def make_input_func(self, ins, kg, tok):
         # tok = deepcopy(tok)
         all_text = self.prompt_template.format(input=ins['input'], output=ins['output'])
+        all_text = all_text.strip() + f" {tok.eos_token}"
         # print(f"all_text:{all_text}")
         inp = tok(all_text)
         input_ids, attention_mask = inp['input_ids'], inp['attention_mask']
@@ -262,8 +263,8 @@ if __name__ == "__main__":
     dash_token = "[DASH]"
     tok.add_tokens([dash_token])
     accelerator = Accelerator()
-    dst = EntityDataset(data_path='data/kg_chat_19099.json', kg_path='data/umls_kg_filter_count_5_with_def.csv', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/EntityDataset_chat")
-    dl = DataLoader(dst, batch_size=1, shuffle=True, collate_fn=dst.collate_fn)
+    dst = EntityDataset(data_path='data/kg_chat_usmle_10178.json', kg_path='data/umls_kg_filter_count_5_with_def.csv', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/EntityDataset_chat_usmle")
+    dl = DataLoader(dst, batch_size=4, shuffle=True, collate_fn=dst.collate_fn)
     dl = accelerator.prepare(dl)
     for d in dl:
         print(d)
