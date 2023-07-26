@@ -1,3 +1,4 @@
+from click import group
 from transformers import AutoModelForCausalLM, AutoTokenizer, get_linear_schedule_with_warmup
 from peft import get_peft_model, LoraConfig, TaskType, PeftModelForCausalLM
 from tokenizers import Tokenizer
@@ -12,7 +13,7 @@ import pickle
 from functools import partial
 import os
 from copy import deepcopy
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, Manager
 from accelerate import Accelerator
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
@@ -21,9 +22,11 @@ import uuid
 
 
 class EntityDataset(Dataset):
-    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=1024, from_pickle=None, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", lazy=False, *args, **kwargs):
+    def __init__(self, data_path: str, kg_path : str, tokenizer: Tokenizer, size=None, max_len=2048, from_pickle=None,
+                 add_dash=True, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", lazy=False, *args, **kwargs):
         self.prompt_template = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
         self.max_len = max_len
+        self.add_dash = add_dash
         self.dash_token = dash_token
         self.tokenizer = tokenizer
         self.kg = pd.read_csv(kg_path).to_dict(orient='records')
@@ -54,23 +57,17 @@ class EntityDataset(Dataset):
         prompt_list = []
 
         # 多进程
-        # process_num = 64
-        # pool = Pool(process_num)
-        # print(f"Pool created with {process_num} process")
-        # shared_data = self.data
-        # shared_kg = self.kg
-        # from multiprocessing import Manager
-        # manager = Manager()
+        shared_data = self.data
+        shared_kg = self.kg
         # shared_data = manager.list(self.data)
         # shared_kg = manager.list(self.kg)
-        # make_input_func = partial(self.make_input_func, kg=shared_kg, tok=self.tokenizer)
-        # for output in tqdm(pool.imap(make_input_func, shared_data),total=len(shared_data)):
-        #     input_ids_list.append(output[0])
-        #     attention_mask_list.append(output[1])
-        #     labels_list.append(output[2])
-        #     hard_position_type_ids_list.append(output[3])
-        #     prompt_list.append(output[4])
-        # pool.close()
+        make_input_func = partial(self.make_input_func, kg=shared_kg, tok=self.tokenizer)
+        for output in tqdm(pool.imap_unordered(make_input_func, shared_data),total=len(shared_data)):
+            input_ids_list.append(output[0])
+            attention_mask_list.append(output[1])
+            labels_list.append(output[2])
+            hard_position_type_ids_list.append(output[3])
+            prompt_list.append(output[4])
 
         # 多线程        
         # import concurrent.futures
@@ -91,14 +88,14 @@ class EntityDataset(Dataset):
         #             print(f'An exception occurred: {exc}')
         
         # 单进程
-        make_input_func = partial(self.make_input_func, kg=self.kg, tok=self.tokenizer)
-        for ins in tqdm(self.data, total=len(self.data)):
-            output = make_input_func(ins)
-            input_ids_list.append(output[0])
-            attention_mask_list.append(output[1])
-            labels_list.append(output[2])
-            hard_position_type_ids_list.append(output[3])
-            prompt_list.append(output[4])
+        # make_input_func = partial(self.make_input_func, kg=self.kg, tok=self.tokenizer)
+        # for ins in tqdm(self.data, total=len(self.data)):
+        #     output = make_input_func(ins)
+        #     input_ids_list.append(output[0])
+        #     attention_mask_list.append(output[1])
+        #     labels_list.append(output[2])
+        #     hard_position_type_ids_list.append(output[3])
+        #     prompt_list.append(output[4])
         
         return input_ids_list, attention_mask_list, labels_list, hard_position_type_ids_list, prompt_list
     
@@ -109,7 +106,7 @@ class EntityDataset(Dataset):
         # print(f"all_text:{all_text}")
         inp = tok(all_text)
         input_ids, attention_mask = inp['input_ids'], inp['attention_mask']
-        et = list({e:random.choice(t) for e,t in zip(ins['input_entities']+ins['output_entities'], ins['input_triplets']+ins['output_triplets']) if len(t) > 0}.items())
+        et = list({e:t for e,t in zip(ins['input_entities']+ins['output_entities'], ins['input_triplets']+ins['output_triplets']) if len(t) > 0}.items())
         et = sorted(et, key=lambda et: - len(et[0])) # 按entity的长度从长到短排序
         # print(f"et:{et}")
         # print(f"input_ids:{input_ids}")
@@ -133,47 +130,38 @@ class EntityDataset(Dataset):
         
         # print(f"input_ids with entities labeled:{input_ids}")
 
-        # 拓展input_ids并计算每个token的hard_position_type_id, 0代表non-entity tokens，1代表entity tokens, 2代表triplet tokens, 3代表triplet target tokens
+        # 拓展input_ids并计算每个token的hard_position_type_id和group_id, 0代表non-entity tokens，1代表entity tokens, 2代表triplet tokens, 3代表triplet target tokens
         hard_position_type_ids = []
+        group_ids = []
         new_input_ids = []
         idx = 0
+        group_idx = 0
         while idx < len(input_ids):
             if input_ids[idx] <= 0:
                 e, t = et[-input_ids[idx]]
-                # tid = random.choice(t)
-                # et[i][1].remove(tid)
-                tid = t
-                triplet = kg[tid]
-                # print(f"e:{e}\ntriplet source: {triplet['source']}\ntriplet edge: {triplet['edge']}\ntriplet target: {triplet['target']}")
-                if e.lower() in triplet['source'].lower():
-                    e_idx = triplet['source'].lower().index(e.lower())
-                    source = triplet['source'][:e_idx] + e + triplet['source'][e_idx+len(e):]
-                    tri_prompt = f"{source}  {self.dash_token} {triplet['edge']}"
-                    tri_target = triplet['target']
-                elif e.lower() in triplet['target'].lower():
-                    e_idx = triplet['target'].lower().index(e.lower())
-                    t = triplet['target'][:e_idx] + e + triplet['target'][e_idx+len(e):]
-                    tri_prompt = f"{t}  {self.dash_token} {triplet['edge']}"
-                    tri_target = triplet['source']
-                else:
-                    raise ValueError("entity not in source and target")
-                assert e in tri_prompt
-                entity_ids = tok(e, add_special_tokens=False)['input_ids']
-                prompt_ids = tok(tri_prompt[:tri_prompt.index(e)].strip(), add_special_tokens=False)['input_ids'] + entity_ids + tok(tri_prompt[tri_prompt.index(e)+len(e):].strip(), add_special_tokens=False)['input_ids']
-                target_ids = tok(tri_target, add_special_tokens=False)['input_ids']
-                # print(f"entity:{entity_ids}\n{tok.batch_decode(entity_ids)}\nprompt:{prompt_ids}\n{tok.batch_decode(prompt_ids)}\ntarget:{target_ids}\n{tok.batch_decode(target_ids)}")
-                new_input_ids.extend(prompt_ids + target_ids)
-                triplet_hard_type_ids = [2 for i in range(len(prompt_ids))] + [3 for i in range(len(target_ids))] # 2 means triplet text, 3 means target text
-                entity_relative_start_idxs = [i for i in range(len(prompt_ids)-len(entity_ids)) if prompt_ids[i:i+len(entity_ids)] == entity_ids]
-                assert len(entity_relative_start_idxs) != 0
-                entity_relative_start_idx = entity_relative_start_idxs[0]
-                for i in range(entity_relative_start_idx, entity_relative_start_idx+len(entity_ids)):
-                    triplet_hard_type_ids[i] = 1 # 1 means entity text
-                hard_position_type_ids.extend(triplet_hard_type_ids)
+                triplets = [kg[tid] for tid in t]
+                e_ids = tok(e, add_special_tokens=False)['input_ids']
+                new_input_ids.extend(e_ids)
+                hard_position_type_ids.extend([1] * len(e_ids))
+                group_ids.extend([-1] * len(e_ids))
+                triplets = [random.choice(triplets)]
+                for triplet in triplets:
+                    tri_prompt = f" [DASH] " if self.add_dash else f" "
+                    tri_target = f"{triplet['source']} {triplet['edge']} {triplet['target']}"
+                    tri_prompt_id = tok(tri_prompt, add_special_tokens=False)['input_ids']
+                    tri_target_id = tok(tri_target, add_special_tokens=False)['input_ids']
+                    new_input_ids.extend(tri_prompt_id)
+                    new_input_ids.extend(tri_target_id)
+                    hard_position_type_ids.extend([2] * len(tri_prompt_id))
+                    hard_position_type_ids.extend([3] * len(tri_target_id))
+                    group_ids.extend([group_idx] * len(tri_prompt_id))
+                    group_ids.extend([group_idx] * len(tri_target_id))
+                    group_idx += 1
                 idx += 1
             else:
                 new_input_ids.append(input_ids[idx])
                 hard_position_type_ids.append(0) # 0 means original text
+                group_ids.append(-1) # -1 means original text
                 idx += 1
         
         
@@ -187,19 +175,28 @@ class EntityDataset(Dataset):
 
         # 利用hard_position_type_ids计算attention_mask_map, shape为seq_len*seq_len
         # 0代表non-entity tokens，1代表entity tokens, 2代表triplet tokens, 3代表triplet target tokens
-        # type0可以看见type0和type1, type1可以看见type0,type1, type2可以看见type1,type2和type3, type3可以看见type1,type2和type3
-        attention_mask = torch.tril(torch.ones(seq_len,seq_len))
+        attention_mask = torch.zeros(seq_len,seq_len, dtype=torch.bool)
+
         for i in (range(seq_len)):
             for j in range(i): # i>j
                 if hard_position_type_ids[i] == 0:
-                    if hard_position_type_ids[j] == 2:
-                        attention_mask[i,j] = 0
+                    if hard_position_type_ids[j] == 0 or hard_position_type_ids[j] == 1:
+                        attention_mask[i,j] = 1
                 elif hard_position_type_ids[i] == 1:
-                    if hard_position_type_ids[j] == 2:
-                        attention_mask[i,j] = 0
-                else:
+                    if hard_position_type_ids[j] == 0 or hard_position_type_ids[j] == 1:
+                        attention_mask[i,j] = 1
+                elif hard_position_type_ids[i] == 2:
                     if hard_position_type_ids[j] == 0:
-                        attention_mask[i,j] = 0
+                        attention_mask[i,j] = 1
+                    if hard_position_type_ids[j] == 2 and group_ids[i] == group_ids[j]:
+                        attention_mask[i,j] = 1
+                elif hard_position_type_ids[i] == 3:
+                    if hard_position_type_ids[j] == 0:
+                        attention_mask[i,j] = 1
+                    if hard_position_type_ids[j] == 2 and group_ids[i] == group_ids[j]:
+                        attention_mask[i,j] = 1
+                    if hard_position_type_ids[j] == 3 and group_ids[i] == group_ids[j]:
+                        attention_mask[i,j] = 1
         
         # print(f"attention_mask:{attention_mask.shape}")
         
@@ -212,14 +209,17 @@ class EntityDataset(Dataset):
             raise ValueError("begin_out_idxs is empty")
         output_start_idx = begin_out_idxs[0] + len(begin_out_ids)
         input_ids = torch.tensor(input_ids)
-        labels = input_ids.clone()
-        labels[:output_start_idx] = -100
+        labels = torch.ones_like(input_ids) * -100
         
-        for i in range(len(hard_position_type_ids)):
+        for i in range(len(labels)):
             if hard_position_type_ids[i] == 3:
                 labels[i] = input_ids[i]
+            elif i > output_start_idx and (hard_position_type_ids[i] == 0 or hard_position_type_ids[i] == 1):
+                labels[i] = input_ids[i]
+
         hard_position_type_ids = torch.tensor(hard_position_type_ids)
         
+        # cut to max_len
         max_len = min(self.max_len, len(input_ids))
         input_ids = input_ids[:max_len]
         attention_mask = attention_mask[:max_len,:max_len]
@@ -270,8 +270,15 @@ if __name__ == "__main__":
     tok.pad_token_id = tok.eos_token_id
     dash_token = "[DASH]"
     tok.add_tokens([dash_token])
-    dst = EntityDataset(data_path='data/kg_chat_usmle_10178.json', kg_path='data/umls_kg_filter_count_5_with_def.csv', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/EntityDataset_chat_usmle")
+    # manager = Manager()
+    process_num = 24
+    pool = Pool(process_num)
+    print(f"Pool created with {process_num} process")
+    dst = EntityDataset(data_path='data/kg_chat_usmle_10178.json', kg_path='data/umls_kg_filter_count_5_with_def_len_100.csv', 
+                        add_dash=True, tokenizer=tok, max_len=8192, dump=True, dump_name="8192_ep_0_new_dash_front", dump_dir="data/EntityDataset_chat_usmle")
     dl = DataLoader(dst, batch_size=4, shuffle=True, collate_fn=dst.collate_fn)
     for d in dl:
         print(d)
         break
+    pool.close()
+    

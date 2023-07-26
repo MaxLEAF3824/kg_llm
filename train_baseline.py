@@ -36,7 +36,7 @@ def main():
     lr = 8e-6
     warmup_ratio = 0.04
     num_epochs = 3
-    batch_size = 2
+    batch_size = 1
     # device = 'cuda'
     out_dir = f"output/full_vicuna_7b_chat_usmle_baseline_ft_bsz{batch_size}_epoch{num_epochs}_lr{lr}_{str(uuid.uuid4().int)[:8]}"
     
@@ -74,7 +74,7 @@ def main():
     for epoch in range(num_epochs):
         
         accelerator.print("preparing dl")
-        dl = accelerator.prepare(dl)
+        # dl = accelerator.prepare(dl)
         
         for step,(input_ids, attention_mask, labels) in enumerate(dl):
             # input_ids = input_ids.to(device)

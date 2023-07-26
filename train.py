@@ -20,8 +20,7 @@ from multiprocessing import Pool, cpu_count
 from accelerate import Accelerator
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
-from entity_dataset import EntityDataset
-from treelib import Tree
+from entity_dataset2 import EntityDataset
 import time
 import uuid
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
@@ -30,15 +29,16 @@ def main():
     mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/vicuna-7b'
     # mt_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/FastChat/checkpoints/medical_llama_13b_chatv1.3/checkpoint-4974/'
     kg_path = "data/umls_kg_filter_count_5.csv"
-    data_path = "data/kg_instruction_chat_usmle.json"
-    pickle_dataset_template = "data/EntityDataset_chat_usmle/ep_{}.pkl"
+    data_path = "data/kg_chat_usmle_10178.json"
+    pickle_dataset_template = "data/EntityDataset_chat_usmle/int16_ep_{}.pkl"
+    lazy = False
 
     max_len = 2048
     dash_token = "[DASH]"
     lr = 8e-6
     warmup_ratio = 0.04
     num_epochs = 3
-    batch_size = 2
+    batch_size = 1
     # device = 'cuda'
     out_dir = f"output/full_vicuna_7b_{str(uuid.uuid4().int)[:8]}"
     
@@ -68,16 +68,9 @@ def main():
     new_shape = model.model.model.embed_tokens.weight.shape if isinstance(model, PeftModelForCausalLM) else model.model.embed_tokens.weight.shape
     print(f"DASH token is added to tokenizer and model\nDASH token id:{dash_token_id}\nEmbedding shape change from:{old_shape} to {new_shape}")
     
-    # 添加peft模块
-    # print("Adding peft to model")
-    # peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1, target_modules=["q_proj","v_proj"])
-    # model = get_peft_model(model, peft_config)
-    # model.half()
-    # model.to(device)
-    # model.print_trainable_parameters()
 
     # 快速初始化数据集
-    dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len,from_pickle=pickle_dataset_template.format(0))
+    dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len, lazy=lazy, from_pickle=pickle_dataset_template.format(0))
     dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
     
     accelerator.print("preparing model")
@@ -91,25 +84,31 @@ def main():
         num_training_steps=(len(dl) * num_epochs),
     )
     
-    device = accelerator.device
+    # device = 'cuda:0'
+    # model.half()
+    # model.to(device)
     accelerator.print("preparing optimizer and scheduler")
     optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
+    accelerator.print("preparing dl")
+    dl = accelerator.prepare_data_loader(dl)
     accelerator.print(f"prepare time:{time.time()-start_time}")
     accelerator.print("start training")
+
     for epoch in range(num_epochs):
-        
-        accelerator.print("preparing dl")
-        dl = accelerator.prepare(dl)
-        
+        accelerator.print("epoch start")
         for step,(input_ids, attention_mask, labels, hard_position_type_ids) in enumerate(dl):
-            # input_ids = input_ids.to(device)
-            # attention_mask = attention_mask.to(device)
-            # labels = labels.to(device)
-
+            input_ids = input_ids.long()
+            attention_mask = attention_mask.float()  
             attention_mask[attention_mask==0] = float('-inf')
-            # accelerator.print("model forward")
-            res = model(input_ids=input_ids, attention_mask=attention_mask, labels=None)
+            
+            input_ids = input_ids.to(model.device)
+            attention_mask = attention_mask.to(model.device)
+            labels = labels.to(model.device)
 
+            accelerator.print("data loaded")
+            res = model(input_ids=input_ids, attention_mask=attention_mask, labels=None)
+            accelerator.print("forward success")
+            
             labels_kg = labels.clone()
             labels_kg[hard_position_type_ids != 3] = -100
             labels_lm = labels.clone()
@@ -142,9 +141,10 @@ def main():
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-        if epoch != num_epochs -1:
-            dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len, from_pickle=pickle_dataset_template.format(epoch+1))
-            dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
+        # if epoch != num_epochs -1:
+        #     # dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len, from_pickle=pickle_dataset_template.format(epoch+1))
+        #     dataset = EntityDataset(data_path, kg_path, tok, max_len=max_len, from_pickle=pickle_dataset_template.format(0))
+        #     dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=dataset.collate_fn)
         accelerator.print(f"train epoch{epoch+1} time:{time.time()-start_time}")
 
     # out_dir = f"output/full_vicuna_7b_chat"

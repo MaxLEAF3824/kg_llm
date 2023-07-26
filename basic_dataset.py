@@ -21,26 +21,29 @@ import uuid
 
 
 class BasicDataset(Dataset):
-    def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=2048, from_pickle=None, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", *args, **kwargs):
+    def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=2048, from_pickle=None, dash_token='[DASH]', dump=False, dump_name=None, dump_dir="data", lazy=False, *args, **kwargs):
         self.prompt_template = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
         self.max_len = max_len
         self.dash_token = dash_token
         self.tokenizer = tokenizer
         self.data = json.load(open(data_path))
         self.data = self.data[:size] if size else self.data
-        if from_pickle:
-            self.input_ids, self.attention_mask, self.labels, self.prompts = pickle.load(open(from_pickle, "rb"))
-            print(f"Loaded dataset from pickle file {from_pickle}")
+        if not lazy:
+            if from_pickle:
+                self.input_ids, self.attention_mask, self.labels, self.prompts = pickle.load(open(from_pickle, "rb"))
+                print(f"Loaded dataset from pickle file {from_pickle}")
+            else:
+                self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs()
+                if dump:
+                    if dump_name is None:
+                        dump_name = f"BasicDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
+                    dump_path = f"{dump_dir}/{dump_name}.pkl"
+                    pickle.dump((self.input_ids, self.attention_mask, self.labels, self.prompts), open(dump_path, "wb"))
+                    print(f"dump dataset to pickle file {dump_path}")
         else:
-            self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs()
-            if dump:
-                if dump_name is None:
-                    dump_name = f"BasicDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
-                dump_path = f"{dump_dir}/{dump_name}.pkl"
-                pickle.dump((self.input_ids, self.attention_mask, self.labels, self.prompts), open(dump_path, "wb"))
-                print(f"dump dataset to pickle file {dump_path}")
-        
+            self.__getitem__ = self.lazy_getitem
         print(f"Loaded dataset with {len(self)} elements")
+        
     
     def make_inputs(self):
         input_ids_list = []
@@ -108,10 +111,15 @@ class BasicDataset(Dataset):
         return input_ids, attention_mask, labels
 
     def __len__(self):
-        return len(self.prompts)
+        return len(self.data)
 
     def __getitem__(self, idx):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
+
+    def lazy_getitem(self, idx):
+        ins = self.data[idx]
+        input_ids, attention_mask, labels, prompt = self.make_input_func(ins, self.tokenizer)
+        return input_ids, attention_mask, labels
 
 if __name__ == "__main__":
     from transformers import AutoTokenizer
@@ -120,10 +128,12 @@ if __name__ == "__main__":
     tok.padding_side = 'right'
     tok.pad_token = tok.eos_token
     tok.pad_token_id = tok.eos_token_id
-    accelerator = Accelerator()
-    dst = BasicDataset(data_path='data/kg_chat_usmle_10178.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_2", dump_dir="data/BasicDataset_chat_usmle")
-    dl = DataLoader(dst, batch_size=1, shuffle=True, collate_fn=dst.collate_fn)
-    dl = accelerator.prepare(dl)
+    dst = BasicDataset(data_path='data/usmle_train.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_0", dump_dir="data/BasicDataset_usmle")
+    dl = DataLoader(dst, batch_size=2, shuffle=True, collate_fn=dst.collate_fn)
     for d in dl:
         print(d)
+        print(len(d))
+        print(d[0].shape)
+        print(d[1].shape)
+        print(d[2].shape)
         break

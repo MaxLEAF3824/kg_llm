@@ -5,10 +5,10 @@ import pandas as pd
 import json
 import jsonlines
 
-df = pd.read_csv("data/umls_kg_filter_count_5_with_def.csv")
+df = pd.read_csv("data/umls_kg_filter_count_5_with_def_len_100.csv")
 slice_start = 44000
 size = 10000
-ner_results = json.load(open("data/ner_results_chat_usmle_all.json", "r"))
+ner_results = json.load(open("data/ner_results_chat_usmle_all_filter.json", "r"))
 ner_results = ner_results
 
 from collections import defaultdict
@@ -36,27 +36,28 @@ print("s2t", len(s2t.keys()), "t2s", len(t2s.keys()))
 class Searcher:
     def __init__(self, keys):
         self.keys = keys
+        self.build()
         self.his = {}
     
+    def build(self):
+        self.keys_reformat = [k.lower().split() for k in self.keys]
+    
     def judge(self, str1: str, str2: str) -> bool:
-        words1 = str1.lower().split()
-        words2 = str2.lower().split()
-
-        start_index = 0
-        word1 = words1[0]
-
-        for i in range(len(words2)):
-            if words2[i] == word1:
-                start_index = i
-                for j in range(1, len(words1)):
-                    if i + j < len(words2) and words1[j] == words2[i + j]:
-                        continue
-                    else:
-                        break
-                else:
-                    return True
-
-        return False
+        words1 = '#$%'.join(str1.lower().split())
+        words2 = '#$%'.join(str2.lower().split())
+        
+        return words1 in words2 and len(words1)/len(words2) > 0.5
+        # word1 = words1[0]
+        # for i in range(len(words2)):
+        #     if words2[i] == word1:
+        #         for j in range(1, len(words1)):
+        #             if i + j < len(words2) and words1[j] == words2[i + j]:
+        #                 continue
+        #             else:
+        #                 break
+        #         else:
+        #             return True
+        # return False
 
     def in_bf(self, q):
         if self.his.get(q):
@@ -76,10 +77,10 @@ class Searcher:
     #         self.his[q] = res
     #         return res
 
-s2t_searcher = Searcher(s2t.keys())
-# t2s_searcher = Searcher(t2s.keys())
+s2t_searcher = Searcher(list(s2t.keys()))
+# t2s_searcher = Searcher(list(t2s.keys()))
 
-def get_entities_triplets(entities, threshold=50):
+def get_entities_triplets(entities, threshold=10):
     all_entities = []
     all_triplets = []
     for e in entities:
@@ -124,9 +125,8 @@ def get_et(res):
 
 from multiprocessing import Pool, cpu_count
 
-process_num = cpu_count()
-pool = Pool(process_num)
-print(f"process_num: {process_num}")
+print(f"process_num: {cpu_count()}")
+pool = Pool(cpu_count())
 for i, output in enumerate(tqdm(pool.imap(get_et, ner_results), total=len(ner_results))):
     grounding_results[i].update(output)
 
