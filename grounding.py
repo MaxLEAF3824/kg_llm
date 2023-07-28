@@ -8,7 +8,7 @@ import jsonlines
 df = pd.read_csv("data/umls_kg_filter_count_5_with_def_len_100.csv")
 slice_start = 44000
 size = 10000
-ner_results = json.load(open("data/ner_results_chat_usmle_all_filter.json", "r"))
+ner_results = json.load(open("data/ner_results_medmcqa_all_filter.json", "r"))
 ner_results = ner_results
 
 from collections import defaultdict
@@ -130,4 +130,4 @@ pool = Pool(cpu_count())
 for i, output in enumerate(tqdm(pool.imap(get_et, ner_results), total=len(ner_results))):
     grounding_results[i].update(output)
 
-json.dump(grounding_results, open(f"data/kg_chat_usmle_{len(ner_results)}.json", "w"))
+json.dump(grounding_results, open(f"data/kg_medmcqa_{len(ner_results)}.json", "w"))

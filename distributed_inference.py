@@ -91,7 +91,7 @@ class MedMCQATest(Dataset):
     def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=1024, *args, **kwargs,):
         self.max_len = max_len
         self.tokenizer = tokenizer
-        self.data = json.load(open(data_path))
+        self.data = list(jsonlines.open(data_path))
         self.data = self.data[:size] if size else self.data
         self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs(self.data)
         print(f"Loaded dataset with {len(self)} elements")
@@ -102,8 +102,8 @@ class MedMCQATest(Dataset):
         prompt_list = []
         for d in data:
             question = d['question'].strip()
-            options = '\nOptions:' + ' '.join([f"{k}: {d['options'][k]}" for k in d['options']])
-            answer = d['answer']
+            options = '\nOptions:' + ' '.join([f"{k[-1].upper()}: {d[k]}" for k in ['opa','opb','opc','opd']])
+            answer = ["A","B","C","D"][d['cop']-1]
             prompt = PROMPT_TEMPLATE.format(input=question+options, output=answer)
             res = self.tokenizer(prompt, return_tensors='pt')
             input_ids, attention_mask = res.input_ids, res.attention_mask
@@ -127,7 +127,7 @@ class MedMCQATest(Dataset):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
 
 def my_predict_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
-    mnt_step = 256
+    mnt_step = 512
     input_ids, attention_mask,label = batch[0][:,:-1], batch[1][:,:-1], batch[2][0,-1]
     input_text = self.tokenizer.decode(input_ids.squeeze())
     label_text = self.tokenizer.decode(label)
@@ -140,20 +140,26 @@ def my_predict_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
                 answer=label_text)
 
 if __name__=="__main__":
-    CUDA_VISIBLE_DEVICES = [0,3,4,5,6,7]
+    CUDA_VISIBLE_DEVICES = [7]
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in CUDA_VISIBLE_DEVICES])
-    mt_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/output/chat_usmle_kg_sample_one_new'
+    mt_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/output/chat_usmle_baseline_ft'
     model = AutoModelForCausalLM.from_pretrained(mt_path).half()
     tok = AutoTokenizer.from_pretrained(mt_path)
     mt = LLM.from_mt(model, tok)
+    
     data_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/data/USMLEdataset/data_clean/questions/US/test.json'
     dst = USMLETest(data_path, tok, max_len=2048)
-    mt.set_func("predict_step", my_predict_step)
+    
+    # data_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/data/medmcqa/dev.json'
+    # dst = MedMCQATest(data_path, tok, max_len=2048)
+    
     trainer = pl.Trainer(devices=list(range(len(CUDA_VISIBLE_DEVICES))), strategy="ddp", precision=16, logger=False)
-    # trainer = pl.Trainer(devices=[0,1], precision=16, logger=False)
-    # res = trainer.test(mt, dst)
-    res = trainer.predict(mt, dst)
-    import json
-    js = json.load(open(data_path))
-    json.dump(res, open(f"{mt_path}/answer.json", 'w'))
+    
+    res = trainer.test(mt, dst)
+    
+    # mt.set_func("predict_step", my_predict_step)
+    # res = trainer.predict(mt, dst)
+    # import json
+    # js = json.load(open(data_path))
+    # json.dump(res, open(f"{mt_path}/answer.json", 'w'))

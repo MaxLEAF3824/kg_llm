@@ -274,8 +274,8 @@ if __name__ == "__main__":
     process_num = 24
     pool = Pool(process_num)
     print(f"Pool created with {process_num} process")
-    dst = EntityDataset(data_path='data/kg_chat_usmle_10178.json', kg_path='data/umls_kg_filter_count_5_with_def_len_100.csv', 
-                        add_dash=True, tokenizer=tok, max_len=8192, dump=True, dump_name="8192_ep_0_new_dash_front", dump_dir="data/EntityDataset_chat_usmle")
+    dst = EntityDataset(data_path='data/kg_medmcqa_105639.json', kg_path='data/umls_kg_filter_count_5_with_def_len_100.csv', 
+                        add_dash=True, tokenizer=tok, max_len=8192, dump=True, dump_name="8192_ep_0_new_dash_front", dump_dir="data/EntityDataset_medmcqa")
     dl = DataLoader(dst, batch_size=4, shuffle=True, collate_fn=dst.collate_fn)
     for d in dl:
         print(d)

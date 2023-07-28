@@ -9,17 +9,19 @@ import re
 import bisect
 import pdb
 import traceback
+import os
+
 
 # instructions = list(jsonlines.open('data/instruction_dataall.jsonl'))
 # data = [ins for ins in instructions if ins['input'] and ins['output']]
 # usmle_train = json.load(open("data/usmle_train.json"))
 # data = [ins for ins in usmle_train if ins['input'] and ins['output']]
-chat_usmle = json.load(open("data/chat_usmle.json"))
+chat_usmle = json.load(open("data/medmcqa_train.json"))
 data = [ins for ins in chat_usmle if ins['input'] and ins['output']]
 
 mt_path = "/mnt/workspace/guoyiqiu/coding/huggingface/my_models/RohanVB_umlsbert_ner"
 mt_path = "/home/cs/yangyuchen/guoyiqiu/my_models/RohanVB_umlsbert_ner"
-mt_path = "/mnt/petrelfs/guoyiqiu/coding/huggingface/my_models/RohanVB_umlsbert_ner"
+# mt_path = "/mnt/petrelfs/guoyiqiu/coding/huggingface/my_models/RohanVB_umlsbert_ner"
 
 ner_model = AutoModelForTokenClassification.from_pretrained(mt_path)
 ner_tok = AutoTokenizer.from_pretrained(mt_path)
@@ -137,15 +139,15 @@ def batch_ner(prompts, ner_model, ner_tok, max_len=512):
         batch_entities.append(entities)
     return batch_entities
 
-bsz = 16
-
-all_ner_results = []
-
-
-for batch_ins in tqdm(batch_list_generator(data, bsz),total=len(data)//bsz):
-    input_batch_entities = batch_ner([ins['input'] for ins in batch_ins], ner_model, ner_tok)
-    output_batch_entities = batch_ner([ins['output'] for ins in batch_ins], ner_model, ner_tok)
-    batch_results = [{'input':batch_ins[i]['input'], 'input_entities':input_batch_entities[i],'output':batch_ins[i]['output'], 'output_entities':output_batch_entities[i],} for i in range(len(input_batch_entities))]
-    all_ner_results.extend(batch_results)
-print(f"error_entity_count:{error_count}")
-json.dump(all_ner_results, open("data/ner_results_chat_usmle_all.json", "w"))
+if __name__ == '__main__':
+    CUDA_VISIBLE_DEVICES = [2]
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in CUDA_VISIBLE_DEVICES])
+    bsz = 32
+    all_ner_results = []
+    for batch_ins in tqdm(batch_list_generator(data, bsz),total=len(data)//bsz):
+        input_batch_entities = batch_ner([ins['input'] for ins in batch_ins], ner_model, ner_tok)
+        output_batch_entities = batch_ner([ins['output'] for ins in batch_ins], ner_model, ner_tok)
+        batch_results = [{'input':batch_ins[i]['input'], 'input_entities':input_batch_entities[i],'output':batch_ins[i]['output'], 'output_entities':output_batch_entities[i],} for i in range(len(input_batch_entities))]
+        all_ner_results.extend(batch_results)
+    print(f"error_entity_count:{error_count}")
+    json.dump(all_ner_results, open("data/ner_results_medmcqa_all.json", "w"))
