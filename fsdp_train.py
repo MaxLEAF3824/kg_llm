@@ -14,6 +14,7 @@
 #    limitations under the License.
 import os
 import copy
+from turtle import position
 from tqdm import tqdm
 from dataclasses import dataclass, field
 import json
@@ -29,7 +30,7 @@ from transformers.trainer_pt_utils import LabelSmoother
 from entity_dataset2 import EntityDataset
 from basic_dataset import BasicDataset
 from torch.distributed.elastic.multiprocessing.errors import record
-
+import torch.nn as nn
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
@@ -81,6 +82,27 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
         del state_dict
         trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
 
+class EntityTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False): 
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        outputs = model(input_ids=inputs['input_ids'],attention_mask=inputs['attention_mask'],position_ids=inputs['position_ids'])
+        
+        loss_fct = nn.CrossEntropyLoss()
+        shift_logits = outputs['logits'][..., :-1, :].contiguous().view(-1, model.config.vocab_size)
+        lm_labels = inputs['labels'].clone()
+        lm_labels[inputs['hard_position_type_ids']==3] = -100
+        kg_labels = inputs['labels'].clone()
+        kg_labels[inputs['hard_position_type_ids']!=3] = -100
+        shift_lm_labels = lm_labels[..., 1:].contiguous().view(-1).to(shift_logits.device)
+        shift_kg_labels = kg_labels[..., 1:].contiguous().view(-1).to(shift_logits.device)
+        lm_loss = loss_fct(shift_logits, shift_lm_labels)
+        kg_loss = loss_fct(shift_logits, shift_kg_labels)
+        loss = 0.8 * lm_loss + 0.2 * kg_loss
+        return (loss, outputs) if return_outputs else loss
 
 @dataclass
 class DataCollatorForEntityDataset(object):
@@ -101,10 +123,16 @@ class DataCollatorForEntityDataset(object):
         attention_mask[attention_mask==1] = 0
         labels = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=-100) for x in labels]).view(bsz, max_len).long() if labels else None
         
-        # hard_position_type_ids = [b[3] for b in instances]
-        # hard_position_type_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=-1) for x in hard_position_type_ids]).view(bsz, max_len)
-        # return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, hard_position_type_ids=hard_position_type_ids)
-        return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        hard_position_type_ids = [b[3] for b in instances]
+        hard_position_type_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=-1) for x in hard_position_type_ids]).view(bsz, max_len).long()
+        
+        position_ids = [b[4] for b in instances]
+        position_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=0) for x in position_ids]).view(bsz, max_len).long()
+        
+        # labels[hard_position_type_ids==3] = -100
+        
+        return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, hard_position_type_ids=hard_position_type_ids, position_ids=position_ids)
+        # return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
 @dataclass
 class DataCollatorForBasicDataset(object):
@@ -151,8 +179,11 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-    
     local_rank = training_args.local_rank
+    
+    rank0_print(f"model_args: {model_args}")
+    rank0_print(f"data_args: {data_args}")
+    # rank0_print(f"training_args: {training_args}")
     
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -184,10 +215,10 @@ def train():
     
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
-    trainer = Trainer(model=model,
-                      tokenizer=tokenizer,
-                      args=training_args,
-                      **data_module)
+    if data_args.basic_dataset:
+        trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    else:
+        trainer = EntityTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)

@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from copy import deepcopy
 torch.set_float32_matmul_precision('medium')
+import json
 
 
 def pad_inputs(batch, pad_token_id=None):
@@ -34,6 +35,7 @@ def pad_inputs(batch, pad_token_id=None):
     return input_ids, attention_mask, labels
 
 PROMPT_TEMPLATE = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
+PROMPT_TEMPLATE = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\nThe correct answer is {output}"
 
 class USMLETest(Dataset):
     def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=1024, *args, **kwargs,):
@@ -127,12 +129,13 @@ class MedMCQATest(Dataset):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
 
 def my_predict_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
-    mnt_step = 512
+    global mnt
+    mnt = 4
     input_ids, attention_mask,label = batch[0][:,:-1], batch[1][:,:-1], batch[2][0,-1]
     input_text = self.tokenizer.decode(input_ids.squeeze())
     label_text = self.tokenizer.decode(label)
     with torch.no_grad():
-        output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=mnt_step, do_sample=False)
+        output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=mnt, do_sample=False)
     output = output[0, input_ids.shape[-1]:]
     output_text = self.tokenizer.decode(output.squeeze())
     return dict(question=input_text,
@@ -140,26 +143,34 @@ def my_predict_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
                 answer=label_text)
 
 if __name__=="__main__":
-    CUDA_VISIBLE_DEVICES = [7]
+    CUDA_VISIBLE_DEVICES = [0]
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in CUDA_VISIBLE_DEVICES])
-    mt_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/output/chat_usmle_baseline_ft'
+    
+    mt_path = 'output/llama_chat_usmle_kg_new_0.2'
+    print(f"mt_path: {mt_path}")
+    
     model = AutoModelForCausalLM.from_pretrained(mt_path).half()
     tok = AutoTokenizer.from_pretrained(mt_path)
     mt = LLM.from_mt(model, tok)
     
-    data_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/data/USMLEdataset/data_clean/questions/US/test.json'
-    dst = USMLETest(data_path, tok, max_len=2048)
+    usmle_data_path = '/home/cs/yangyuchen/yushengliao/Medical_LLM/data/USMLEdataset/data_clean/questions/US/test.json'
+    dst_usmle = USMLETest(usmle_data_path, tok, max_len=2048, )
     
-    # data_path = '/home/cs/yangyuchen/guoyiqiu/kg_llm/data/medmcqa/dev.json'
-    # dst = MedMCQATest(data_path, tok, max_len=2048)
+    medmcqa_data_path = 'data/medmcqa/dev.json'
+    dst_medmcqa = MedMCQATest(medmcqa_data_path, tok, max_len=2048, )
     
-    trainer = pl.Trainer(devices=list(range(len(CUDA_VISIBLE_DEVICES))), strategy="ddp", precision=16, logger=False)
+    trainer = pl.Trainer(devices=list(range(len(CUDA_VISIBLE_DEVICES))),accelerator='gpu', precision=16, logger=False)
     
-    res = trainer.test(mt, dst)
+    # print("USMLE")
+    # res1 = trainer.test(mt, dst_usmle)
     
-    # mt.set_func("predict_step", my_predict_step)
-    # res = trainer.predict(mt, dst)
-    # import json
-    # js = json.load(open(data_path))
-    # json.dump(res, open(f"{mt_path}/answer.json", 'w'))
+    # print("MEDMCQA")
+    # res2 = trainer.test(mt, dst_medmcqa)
+    
+    mt.set_func("predict_step", my_predict_step)
+    res1 = trainer.predict(mt, dst_usmle)
+    res2 = trainer.predict(mt, dst_medmcqa)
+
+    json.dump(res1, open(f"{mt_path}/panswer_usmle.json", 'w'))
+    json.dump(res2, open(f"{mt_path}/panswer_medmcqa.json", 'w'))

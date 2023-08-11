@@ -28,9 +28,11 @@ class BasicDataset(Dataset):
         self.tokenizer = tokenizer
         self.data = json.load(open(data_path))
         self.data = self.data[:size] if size else self.data
+        self.length = len(self.data)
         if not lazy:
             if from_pickle:
                 self.input_ids, self.attention_mask, self.labels, self.prompts = pickle.load(open(from_pickle, "rb"))
+                self.length = len(self.input_ids)
                 print(f"Loaded dataset from pickle file {from_pickle}")
             else:
                 self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs()
@@ -111,7 +113,7 @@ class BasicDataset(Dataset):
         return input_ids, attention_mask, labels
 
     def __len__(self):
-        return len(self.data)
+        return self.length
 
     def __getitem__(self, idx):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
@@ -128,7 +130,7 @@ if __name__ == "__main__":
     tok.padding_side = 'right'
     tok.pad_token = tok.eos_token
     tok.pad_token_id = tok.eos_token_id
-    dst = BasicDataset(data_path='data/usmle_train.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_0", dump_dir="data/BasicDataset_usmle")
+    dst = BasicDataset(data_path='data/chat_usmle_triplets.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_0", dump_dir="data/BasicDataset_chat_usmle_triplets")
     dl = DataLoader(dst, batch_size=2, shuffle=True, collate_fn=dst.collate_fn)
     for d in dl:
         print(d)

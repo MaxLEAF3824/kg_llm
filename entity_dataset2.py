@@ -18,7 +18,7 @@ from accelerate import Accelerator
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 import uuid
-
+import bisect
 
 
 class EntityDataset(Dataset):
@@ -32,17 +32,19 @@ class EntityDataset(Dataset):
         self.kg = pd.read_csv(kg_path).to_dict(orient='records')
         self.data = json.load(open(data_path))
         self.data = self.data[:size] if size else self.data
+        self.length = len(self.data)
         if not lazy:
             if from_pickle:
-                self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts = pickle.load(open(from_pickle, "rb"))
+                self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.position_ids, self.prompts = pickle.load(open(from_pickle, "rb"))
+                self.length = len(self.input_ids)
                 print(f"Loaded dataset from pickle file {from_pickle}")
             else:
-                self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts = self.make_inputs()
+                self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.position_ids, self.prompts = self.make_inputs()
                 if dump:
                     if dump_name is None:
                         dump_name = f"EntityDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
                     dump_path = f"{dump_dir}/{dump_name}.pkl"
-                    pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.prompts), open(dump_path, "wb"))
+                    pickle.dump((self.input_ids, self.attention_mask, self.labels, self.hard_position_type_ids, self.position_ids, self.prompts), open(dump_path, "wb"))
                     print(f"dump dataset to pickle file {dump_path}")
         else:
             print("lazy loading...")
@@ -55,19 +57,7 @@ class EntityDataset(Dataset):
         labels_list = []
         hard_position_type_ids_list = []
         prompt_list = []
-
-        # 多进程
-        # shared_data = self.data
-        # shared_kg = self.kg
-        # # shared_data = manager.list(self.data)
-        # # shared_kg = manager.list(self.kg)
-        # make_input_func = partial(self.make_input_func, kg=shared_kg, tok=self.tokenizer)
-        # for output in tqdm(pool.imap_unordered(make_input_func, shared_data),total=len(shared_data)):
-        #     input_ids_list.append(output[0])
-        #     attention_mask_list.append(output[1])
-        #     labels_list.append(output[2])
-        #     hard_position_type_ids_list.append(output[3])
-        #     prompt_list.append(output[4])
+        position_ids_list = []
 
         # 多线程        
         import concurrent.futures
@@ -83,7 +73,8 @@ class EntityDataset(Dataset):
                     attention_mask_list.append(output[1])
                     labels_list.append(output[2])
                     hard_position_type_ids_list.append(output[3])
-                    prompt_list.append(output[4])
+                    position_ids_list.append(output[4])
+                    prompt_list.append(output[5])
                 except Exception as exc:
                     print(f'An exception occurred: {exc}')
         
@@ -95,9 +86,10 @@ class EntityDataset(Dataset):
         #     attention_mask_list.append(output[1])
         #     labels_list.append(output[2])
         #     hard_position_type_ids_list.append(output[3])
-        #     prompt_list.append(output[4])
+        #     position_ids_list.append(output[4])
+        #     prompt_list.append(output[5])
         
-        return input_ids_list, attention_mask_list, labels_list, hard_position_type_ids_list, prompt_list
+        return input_ids_list, attention_mask_list, labels_list, hard_position_type_ids_list, position_ids_list, prompt_list
     
     def make_input_func(self, ins, kg, tok):
         # tok = deepcopy(tok)
@@ -107,7 +99,8 @@ class EntityDataset(Dataset):
         inp = tok(all_text)
         input_ids = inp['input_ids']
         et = list({e:t for e,t in zip(ins['input_entities']+ins['output_entities'], ins['input_triplets']+ins['output_triplets']) if len(t) > 0}.items())
-        et = sorted(et, key=lambda et: - len(et[0])) # 按entity的长度从长到短排序
+        et = sorted(et, key=lambda et: -len(tok(et[0], add_special_tokens=False)['input_ids'])) # 按entity的长度从长到短排序
+        # print('et: ', et)
         
         
         # print(f"et:{et}")
@@ -142,22 +135,35 @@ class EntityDataset(Dataset):
             while idx < len(input_ids):
                 if input_ids[idx] <= 0:
                     e, t = et[-input_ids[idx]]
-                    triplets = [kg[tid] for tid in t]
+                    # print('t: ', t)
                     e_ids = tok(e, add_special_tokens=False)['input_ids']
                     new_input_ids.extend(e_ids)
                     hard_position_type_ids.extend([1] * len(e_ids))
                     group_ids.extend([-1] * len(e_ids))
-                    triplets = [random.choice(triplets)]
+                    sample_num = min(2, len(t))
+                    tids = random.sample(t, sample_num)
+                    triplets = [kg[tid] for tid in tids]
                     for triplet in triplets:
-                        tri_prompt = f"[DASH] " if self.add_dash else f" "
-                        tri_target = f"{triplet['source']} {triplet['edge']} {triplet['target']}"
+                        tri_prompt = f"[DASH]" if self.add_dash else ""
                         tri_prompt_id = tok(tri_prompt, add_special_tokens=False)['input_ids']
-                        tri_target_id = tok(tri_target, add_special_tokens=False)['input_ids']
+                        
+                        tri_source_id = tok(triplet['source'], add_special_tokens=False)['input_ids']
+                        tri_edge_id = tok(triplet['edge'], add_special_tokens=False)['input_ids']
+                        tri_target_id = tok(triplet['target'], add_special_tokens=False)['input_ids']
+                        
                         new_input_ids.extend(tri_prompt_id)
+                        new_input_ids.extend(tri_source_id)
+                        new_input_ids.extend(tri_edge_id)
                         new_input_ids.extend(tri_target_id)
+                        
                         hard_position_type_ids.extend([2] * len(tri_prompt_id))
+                        hard_position_type_ids.extend([3] * len(tri_source_id))
+                        hard_position_type_ids.extend([2] * len(tri_edge_id))
                         hard_position_type_ids.extend([3] * len(tri_target_id))
+                        
                         group_ids.extend([group_idx] * len(tri_prompt_id))
+                        group_ids.extend([group_idx] * len(tri_source_id))
+                        group_ids.extend([group_idx] * len(tri_edge_id))
                         group_ids.extend([group_idx] * len(tri_target_id))
                         group_idx += 1
                     idx += 1
@@ -184,6 +190,7 @@ class EntityDataset(Dataset):
         # 0代表non-entity tokens，1代表entity tokens, 2代表triplet tokens, 3代表triplet target tokens
         attention_mask = torch.ones(seq_len,seq_len, dtype=torch.bool)
         attention_mask = torch.tril(attention_mask, diagonal=0)
+        position_ids = torch.arange(seq_len, dtype=torch.long)
         
         if has_entity:
             hpti = torch.tensor(hard_position_type_ids)
@@ -202,18 +209,22 @@ class EntityDataset(Dataset):
             triplet_index_start_end = triplet_index[torch.concat([triplet_index_index + 1,triplet_index_index]).tolist() + [0, -1]].sort()[0]
             triplet_index_range = [(triplet_index_start_end[2*i].item(),triplet_index_start_end[2*i+1].item()+1) for i in range(len(triplet_index_start_end)//2)]
             # print('triplet_index_range: ', triplet_index_range)
+            position_ids[(hpti <= 1)] = torch.arange(len(original_index))
 
             # 每个original token看不到的triplet group
             for oir in original_index_range:
                 for tir in triplet_index_range:
                     attention_mask[oir[0]:oir[1],tir[0]:tir[1]] = False
-            # 每个triplet group看不到自己前面一个entity和自己前面的所有triplet group
+            # 每个triplet group只看得到自己前面一个entity
             for i, tir in enumerate(triplet_index_range):
-                cur_eir = entity_index_range[i]
-                attention_mask[tir[0]:tir[1],cur_eir[0]:cur_eir[1]] = False
-                for j in range(i):
-                    pre_tir = triplet_index_range[j]
-                    attention_mask[tir[0]:tir[1],pre_tir[0]:pre_tir[1]] = False
+                attention_mask[tir[0]:tir[1],:tir[0]] = False
+                cur_eir = entity_index_range[bisect.bisect_right([x[1] for x in entity_index_range], tir[0])-1]
+                attention_mask[tir[0]:tir[1],cur_eir[0]:cur_eir[1]] = True
+                position_ids[tir[0]:tir[1]] = torch.arange(tir[1]-tir[0])+1+position_ids[tir[0]-1]
+                # for j in range(i):
+                #     pre_tir = triplet_index_range[j]
+                #     attention_mask[tir[0]:tir[1],pre_tir[0]:pre_tir[1]] = False
+        # print('position_ids: ', position_ids)
         # print(f"attention_mask:{attention_mask.shape}")
         
         blank_prompt = self.prompt_template.format(input="",output="")
@@ -241,41 +252,41 @@ class EntityDataset(Dataset):
         attention_mask = attention_mask[:max_len,:max_len]
         labels = labels[:max_len]
         hard_position_type_ids = hard_position_type_ids[:max_len]
-        
+        position_ids = position_ids[:max_len]
         prompt = tok.decode(input_ids)
         # print("done.")
-        return input_ids, attention_mask, labels, hard_position_type_ids, prompt
+        return input_ids, attention_mask, labels, hard_position_type_ids, position_ids, prompt
     
     def collate_fn(self, batch):
         input_ids = [b[0] for b in batch]
         attention_mask = [b[1] for b in batch]
         labels = [b[2] for b in batch]
         hard_position_type_ids = [b[3] for b in batch]
+        position_ids = [b[4] for b in batch]
         
-        return self.pad_inputs((input_ids, attention_mask, labels, hard_position_type_ids), self.tokenizer.pad_token_id)
+        return self.pad_inputs((input_ids, attention_mask, labels, hard_position_type_ids, position_ids), self.tokenizer.pad_token_id)
     
     def pad_inputs(self, batch, pad_token_id=None):
         '''(input_ids:list[tensor], attention_mask:list[tensor, shape=seq*seq], labels:list[tensor])'''
-        input_ids, attention_mask, labels, hard_position_type_ids = batch[0], batch[1], batch[2], batch[3]
+        input_ids, attention_mask, labels, hard_position_type_ids, position_ids = batch[0], batch[1], batch[2], batch[3], batch[4]
         bsz = len(input_ids)
         max_len = max([x.shape[-1] for x in input_ids])
         input_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=pad_token_id) for x in input_ids]).view(bsz, max_len)
         attention_mask = torch.stack([F.pad(x, (max_len - x.shape[-1], 0, 0, max_len - x.shape[-1]), mode='constant', value=0) for x in attention_mask]).view(bsz, 1, max_len, max_len)
         labels = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=-100) for x in labels]).view(bsz, max_len) if labels else None
         hard_position_type_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=-1) for x in hard_position_type_ids]).view(bsz, max_len)
+        position_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=0) for x in position_ids]).view(bsz, max_len)
         
-        return input_ids, attention_mask, labels, hard_position_type_ids
+        return input_ids, attention_mask, labels, hard_position_type_ids, position_ids
 
     def __len__(self):
-        return len(self.data)
+        return self.length
 
     def __getitem__(self, idx):
-        return self.input_ids[idx], self.attention_mask[idx], self.labels[idx], self.hard_position_type_ids[idx]
+        return self.input_ids[idx], self.attention_mask[idx], self.labels[idx], self.hard_position_type_ids[idx], self.position_ids[idx]
     
     def lazy_getitem(self, idx):
-        ins = self.data[idx]
-        input_ids, attention_mask, labels, hard_position_type_ids, prompt = self.make_input_func(ins, self.tokenizer)
-        return input_ids, attention_mask, labels, hard_position_type_ids
+        return self.make_input_func(self.data[idx], self.tokenizer)[:-1]
 
 if __name__ == "__main__":
     from transformers import AutoTokenizer
@@ -290,8 +301,8 @@ if __name__ == "__main__":
     # process_num = 2
     # pool = Pool(process_num)
     # print(f"Pool created with {process_num} process")
-    dst = EntityDataset(data_path='data/kg_medmcqa_62620.json', kg_path='data/umls_kg_filter_count_5_with_def_len_100.csv', 
-                        add_dash=True, tokenizer=tok, max_len=8192, size=50000, dump=True, dump_name="test", dump_dir="data/EntityDataset_medmcqa")
+    dst = EntityDataset(data_path='data/kg_chat_usmle_10178.json', kg_path='data/umls_kg_filter_count_5_with_def_len_100.csv', 
+                        add_dash=True, tokenizer=tok, max_len=8192, dump=True, dump_name="ep_0", dump_dir="data/EntityDataset_chat_usmle")
     # pool.close()
     
     dl = DataLoader(dst, batch_size=4, shuffle=True, collate_fn=dst.collate_fn)

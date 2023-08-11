@@ -4,12 +4,11 @@ import bisect
 import pandas as pd
 import json
 import jsonlines
+from tqdm.auto import tqdm
 
+from copy import deepcopy
 df = pd.read_csv("data/umls_kg_filter_count_5_with_def_len_100.csv")
-slice_start = 44000
-size = 10000
-ner_results = json.load(open("data/ner_results_medmcqa_all_filter.json", "r"))
-ner_results = ner_results
+
 
 from collections import defaultdict
 s2t = defaultdict(list)
@@ -17,6 +16,17 @@ t2s = defaultdict(list)
 edge_white_list = ['has active ingredient',
                    'has causative agent',
                    'has pathological process',
+                   'has direct device',
+                   'has associated morphology',
+                   'has direct morphology',
+                   'has direct procedure site',
+                   'has direct substance',
+                   'has dose form',
+                   'has finding site',
+                   'has intent',
+                   'has method',
+                   'has occurrence',
+                   'has procedure site',
                    'possibly equivalent to',
                    'has definition of',
                    ]
@@ -46,7 +56,7 @@ class Searcher:
         words1 = '#$%'.join(str1.lower().split())
         words2 = '#$%'.join(str2.lower().split())
         
-        return words1 in words2 and len(words1)/len(words2) > 0.5
+        return words1 in words2 and len(words1)/len(words2) > 0.8
         # word1 = words1[0]
         # for i in range(len(words2)):
         #     if words2[i] == word1:
@@ -105,9 +115,9 @@ def get_entities_triplets(entities, threshold=10):
     return all_entities, all_triplets
 
 
-from tqdm.auto import tqdm
 
-from copy import deepcopy
+ner_results = json.load(open("data/ner_results_chat_usmle_all_filter.json", "r"))
+ner_results = ner_results
 grounding_results = deepcopy(ner_results)
 
 def get_et(res):
@@ -120,9 +130,6 @@ def get_et(res):
         "output_triplets": out_t,
     }
 
-# for i, res in enumerate(tqdm(ner_results,total=len(ner_results))):
-#     grounding_results[i].update(get_et(res))
-
 from multiprocessing import Pool, cpu_count
 
 print(f"process_num: {cpu_count()}")
@@ -130,4 +137,4 @@ pool = Pool(cpu_count())
 for i, output in enumerate(tqdm(pool.imap(get_et, ner_results), total=len(ner_results))):
     grounding_results[i].update(output)
 
-json.dump(grounding_results, open(f"data/kg_medmcqa_{len(ner_results)}.json", "w"))
+json.dump(grounding_results, open(f"data/kg_chat_usmle_{len(ner_results)}.json", "w"))
