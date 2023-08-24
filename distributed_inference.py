@@ -36,6 +36,7 @@ def pad_inputs(batch, pad_token_id=None):
 
 PROMPT_TEMPLATE = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
 PROMPT_TEMPLATE = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\nThe correct answer is {output}"
+COT_PROMPT_TEMPLATE = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\n##USER:\n{input}\n\n##ASSISTANT:\n{output}"
 
 class USMLETest(Dataset):
     def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=1024, *args, **kwargs,):
@@ -75,19 +76,6 @@ class USMLETest(Dataset):
         return len(self.prompts)
     def __getitem__(self, idx):
         return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
-
-def my_predict_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
-    with torch.no_grad():
-        input_ids, attention_mask = batch[0], batch[1]
-        label = batch[2]
-        output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, max_new_tokens=128, do_sample=False)
-    output = output[0, input_ids.shape[-1]-1:]
-    input_text = self.tokenizer.decode(input_ids.squeeze())
-    output_text = self.tokenizer.decode(output.squeeze())
-    label_text = self.tokenizer.decode(label[0,-1])
-    return dict(question=input_text,
-                text=output_text,
-                answer=label_text)
 
 class MedMCQATest(Dataset):
     def __init__(self, data_path: str, tokenizer: Tokenizer, size=None, max_len=1024, *args, **kwargs,):
@@ -147,7 +135,7 @@ if __name__=="__main__":
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in CUDA_VISIBLE_DEVICES])
     
-    mt_path = 'output/llama_chat_usmle_kg_new_0.2'
+    mt_path = 'output/llama_chat_usmle_baseline'
     print(f"mt_path: {mt_path}")
     
     model = AutoModelForCausalLM.from_pretrained(mt_path).half()

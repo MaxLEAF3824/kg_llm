@@ -44,10 +44,8 @@ class ModelArguments:
 @dataclass
 class DataArguments:
     basic_dataset : bool = field(default=False)
-    pickle_path : str = field(default="data/EntityDataset_chat_usmle/int16_ep_0.pkl",
-                              metadata={"help": "Path to the training data."})
-    kg_path : str = field(default="data/umls_kg_filter_count_5.csv")
-    data_path : str = field(default="data/kg_chat_usmle_10178.json")
+    kg_path : str = field(default=None)
+    data_path : str = field(default=None)
 
 
 @dataclass
@@ -55,7 +53,7 @@ class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     model_max_length: int = field(
-        default=512,
+        default=2048,
         metadata={
             "help":
             "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
@@ -89,7 +87,7 @@ class EntityTrainer(Trainer):
 
         Subclass and override for custom behavior.
         """
-        outputs = model(input_ids=inputs['input_ids'],attention_mask=inputs['attention_mask'],position_ids=inputs['position_ids'])
+        outputs = model(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], position_ids=inputs['position_ids'])
         
         loss_fct = nn.CrossEntropyLoss()
         shift_logits = outputs['logits'][..., :-1, :].contiguous().view(-1, model.config.vocab_size)
@@ -101,7 +99,7 @@ class EntityTrainer(Trainer):
         shift_kg_labels = kg_labels[..., 1:].contiguous().view(-1).to(shift_logits.device)
         lm_loss = loss_fct(shift_logits, shift_lm_labels)
         kg_loss = loss_fct(shift_logits, shift_kg_labels)
-        loss = 0.8 * lm_loss + 0.2 * kg_loss
+        loss = lm_loss + 0.2 * kg_loss
         return (loss, outputs) if return_outputs else loss
 
 @dataclass
@@ -129,10 +127,8 @@ class DataCollatorForEntityDataset(object):
         position_ids = [b[4] for b in instances]
         position_ids = torch.stack([F.pad(x, (max_len - x.shape[-1], 0), mode='constant', value=0) for x in position_ids]).view(bsz, max_len).long()
         
-        # labels[hard_position_type_ids==3] = -100
         
         return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels, hard_position_type_ids=hard_position_type_ids, position_ids=position_ids)
-        # return dict(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
 @dataclass
 class DataCollatorForBasicDataset(object):
@@ -158,15 +154,12 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     if data_args.basic_dataset:
-        train_dataset = BasicDataset(data_path=data_args.data_path, tokenizer=tokenizer, from_pickle=data_args.pickle_path)
-    else:
-        train_dataset = EntityDataset(data_path=data_args.data_path, kg_path=data_args.kg_path, tokenizer=tokenizer, from_pickle=data_args.pickle_path)
-    
-    if data_args.basic_dataset:
+        train_dataset = BasicDataset(data_path=data_args.data_path, tokenizer=tokenizer)
         data_collator = DataCollatorForBasicDataset(tokenizer=tokenizer)
     else:
+        train_dataset = EntityDataset(data_path=data_args.data_path, kg_path=data_args.kg_path, tokenizer=tokenizer)
         data_collator = DataCollatorForEntityDataset(tokenizer=tokenizer)
-
+    
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)
@@ -181,10 +174,8 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
     
-    rank0_print(f"model_args: {model_args}")
-    rank0_print(f"data_args: {data_args}")
-    # rank0_print(f"training_args: {training_args}")
-    
+    rank0_print(f"model_args: {model_args}\ndata_args: {data_args}")
+
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
     )
@@ -193,38 +184,42 @@ def train():
         model_args.model_name_or_path,
     )
     
-    # 删除llama的_prepare_decoder_attention_mask
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
-        return attention_mask
     
-    if not data_args.basic_dataset:
-        tok = tokenizer
+    if data_args.basic_dataset:
+        data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+        trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    else:
         # 调整tokenizer
-        tok.padding_side = 'right'
-        tok.pad_token = tok.eos_token
-        tok.pad_token_id = tok.eos_token_id
-        tok.add_tokens(["[DASH]"])
+        tokenizer.padding_side = 'right'
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.add_tokens(["[DASH]"])
+
+        def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+            return attention_mask
+
+        # 删除llama的_prepare_decoder_attention_mask
         transformers.models.llama.modeling_llama.LlamaModel._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
         # 在模型中添加dash_token
         old_shape = model.model.embed_tokens.weight.shape
-        model.resize_token_embeddings(len(tok))
-        dash_token_id = tok.convert_tokens_to_ids("[DASH]")
+        model.resize_token_embeddings(len(tokenizer))
+        dash_token_id = tokenizer.convert_tokens_to_ids("[DASH]")
+        
         # Add the new token to the end of the embedding table
         new_shape = model.model.embed_tokens.weight.shape
         print(f"DASH token is added to tokenizer and model\nDASH token id:{dash_token_id}\nEmbedding shape change from:{old_shape} to {new_shape}")
-    
-    data_module = make_supervised_data_module(tokenizer=tokenizer,
-                                              data_args=data_args)
-    if data_args.basic_dataset:
-        trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
-    else:
+        
+        data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
         trainer = EntityTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
     else:
         trainer.train()
+    
     trainer.save_state()
+    
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 

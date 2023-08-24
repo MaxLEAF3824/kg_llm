@@ -29,21 +29,6 @@ class BasicDataset(Dataset):
         self.data = json.load(open(data_path))
         self.data = self.data[:size] if size else self.data
         self.length = len(self.data)
-        if not lazy:
-            if from_pickle:
-                self.input_ids, self.attention_mask, self.labels, self.prompts = pickle.load(open(from_pickle, "rb"))
-                self.length = len(self.input_ids)
-                print(f"Loaded dataset from pickle file {from_pickle}")
-            else:
-                self.input_ids, self.attention_mask, self.labels, self.prompts = self.make_inputs()
-                if dump:
-                    if dump_name is None:
-                        dump_name = f"BasicDataset_{len(self)}_{str(uuid.uuid4().int)[:8]}"
-                    dump_path = f"{dump_dir}/{dump_name}.pkl"
-                    pickle.dump((self.input_ids, self.attention_mask, self.labels, self.prompts), open(dump_path, "wb"))
-                    print(f"dump dataset to pickle file {dump_path}")
-        else:
-            self.__getitem__ = self.lazy_getitem
         print(f"Loaded dataset with {len(self)} elements")
         
     
@@ -90,9 +75,7 @@ class BasicDataset(Dataset):
         attention_mask = attention_mask[:max_len]
         labels = labels[:max_len]
         
-        prompt = tok.decode(input_ids)
-        # print("done.")
-        return input_ids, attention_mask, labels, prompt
+        return input_ids, attention_mask, labels
     
     def collate_fn(self, batch):
         input_ids = [b[0] for b in batch]
@@ -116,12 +99,10 @@ class BasicDataset(Dataset):
         return self.length
 
     def __getitem__(self, idx):
-        return self.input_ids[idx], self.attention_mask[idx], self.labels[idx]
-
-    def lazy_getitem(self, idx):
         ins = self.data[idx]
-        input_ids, attention_mask, labels, prompt = self.make_input_func(ins, self.tokenizer)
+        input_ids, attention_mask, labels = self.make_input_func(ins, self.tokenizer)
         return input_ids, attention_mask, labels
+
 
 if __name__ == "__main__":
     from transformers import AutoTokenizer
@@ -130,12 +111,5 @@ if __name__ == "__main__":
     tok.padding_side = 'right'
     tok.pad_token = tok.eos_token
     tok.pad_token_id = tok.eos_token_id
-    dst = BasicDataset(data_path='data/chat_usmle_triplets.json', tokenizer=tok, max_len=2048, dump=True, dump_name="ep_0", dump_dir="data/BasicDataset_chat_usmle_triplets")
-    dl = DataLoader(dst, batch_size=2, shuffle=True, collate_fn=dst.collate_fn)
-    for d in dl:
-        print(d)
-        print(len(d))
-        print(d[0].shape)
-        print(d[1].shape)
-        print(d[2].shape)
-        break
+    dst = BasicDataset(data_path='data/usmle_train.json', tokenizer=tok)
+    print(dst[0])
