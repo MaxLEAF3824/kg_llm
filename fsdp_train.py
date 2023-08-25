@@ -59,6 +59,7 @@ class TrainingArguments(transformers.TrainingArguments):
             "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
         },
     )
+    kg_loss_ratio: float = field(default=0.2)
 
 local_rank = None
 
@@ -99,7 +100,7 @@ class EntityTrainer(Trainer):
         shift_kg_labels = kg_labels[..., 1:].contiguous().view(-1).to(shift_logits.device)
         lm_loss = loss_fct(shift_logits, shift_lm_labels)
         kg_loss = loss_fct(shift_logits, shift_kg_labels)
-        loss = lm_loss + 0.2 * kg_loss
+        loss = lm_loss + kg_loss_ratio * kg_loss
         return (loss, outputs) if return_outputs else loss
 
 @dataclass
@@ -220,8 +221,7 @@ def train():
     
     trainer.save_state()
     
-    safe_save_model_for_hf_trainer(trainer=trainer,
-                                   output_dir=training_args.output_dir)
+    safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir)
 
 
 if __name__ == "__main__":
